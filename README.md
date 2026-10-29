@@ -25,7 +25,7 @@ Everything runs on **your own laptop** with Docker, using **your own Google acco
 ### 1. Get the code
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/Yeswanth07/invoice-automation
 cd invoice-automation
 ```
 
