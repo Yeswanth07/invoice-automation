@@ -1,0 +1,632 @@
+{
+  "name": "Monthly Invoice – duplicate sheet & email PDF",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 11 28 * *"
+            }
+          ]
+        }
+      },
+      "id": "5bf083ef-b135-413f-a7b3-6949b74b5682",
+      "name": "Every 28th at 9 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "spreadsheetId",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "c2",
+              "name": "toEmail",
+              "value": "bhagya.lakshmi@iiitb.ac.in",
+              "type": "string"
+            },
+            {
+              "id": "c3",
+              "name": "invoiceNoCell",
+              "value": "D2",
+              "type": "string"
+            },
+            {
+              "id": "c4",
+              "name": "invoiceDateCell",
+              "value": "D3",
+              "type": "string"
+            },
+            {
+              "id": "c5",
+              "name": "periodCell",
+              "value": "D6",
+              "type": "string"
+            },
+            {
+              "id": "17d3c0c8-6e5b-4a43-b942-d07bf2dabf20",
+              "name": "declarationTemplateId",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "03d7b46f-67b3-44f1-ba39-8a0b3a71206f",
+              "name": "declarationFolderId",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "615ebd8b-e341-4dd3-a918-3b433044d49d",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $json.spreadsheetId }}?fields=sheets.properties(sheetId,title,index)",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {}
+      },
+      "id": "1658fed5-4507-4bde-b22d-a122ce857b2c",
+      "name": "Get Sheet List",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        448,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "L0rkqfP0tXLoe6AQ",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config').first().json;\nconst sheets = $input.first().json.sheets.map(s => s.properties);\n\nconst now = $now; // uses the workflow timezone (Asia/Kolkata)\nconst newName = now.toFormat('LLLL yyyy'); // e.g. \"September 2026\"\n\n// Stop quietly if this month's sheet already exists (safe to re-run)\nif (sheets.some(s => s.title === newName)) {\n  return [];\n}\n\n// Latest sheet = tab whose name is the most recent \"Month YYYY\".\n// Falls back to the right-most tab if no tab names parse as dates.\nconst dated = sheets\n  .map(s => ({ ...s, dt: DateTime.fromFormat(s.title, 'LLLL yyyy') }))\n  .filter(s => s.dt.isValid)\n  .sort((a, b) => b.dt.toMillis() - a.dt.toMillis());\nconst latest = dated[0] || sheets.reduce((a, b) => (a.index > b.index ? a : b));\n\nconst start = now.startOf('month');\nconst end = now.endOf('month');\n\nreturn [{\n  json: {\n    spreadsheetId: cfg.spreadsheetId,\n    toEmail: cfg.toEmail,\n    invoiceNoCell: cfg.invoiceNoCell,\n    invoiceDateCell: cfg.invoiceDateCell,\n    periodCell: cfg.periodCell,\n    sourceSheetId: latest.sheetId,\n    sourceTitle: latest.title,\n    newIndex: latest.index + 1,\n    newName,\n    invoiceDate: end.toFormat('dd-LL-yyyy'),\n    period: `${start.toFormat('dd-LL-yyyy')} to ${end.toFormat('dd-LL-yyyy')}`,\n  },\n}];"
+      },
+      "id": "c013c4e3-3be8-4d60-92a1-186827c75706",
+      "name": "Plan New Sheet",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $json.spreadsheetId }}/values/{{ encodeURIComponent(\"'\" + $json.sourceTitle + \"'!\" + $json.invoiceNoCell) }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {}
+      },
+      "id": "27ac126a-a308-4f37-9e8c-79682a2f713a",
+      "name": "Read Last Invoice No",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "L0rkqfP0tXLoe6AQ",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const plan = $('Plan New Sheet').first().json;\nconst prev = String($input.first().json.values?.[0]?.[0] ?? '');\n\n// Increment the first number in the invoice no, keeping zero padding: INV_05 -> INV_06\nconst m = prev.match(/\\d+/);\nif (!m) {\n  throw new Error(`No number found in '${plan.sourceTitle}'!${plan.invoiceNoCell} (value: \"${prev}\")`);\n}\nconst next = String(Number(m[0]) + 1).padStart(m[0].length, '0');\nconst invoiceNo = prev.slice(0, m.index) + next + prev.slice(m.index + m[0].length);\n\nconst tab = `'${plan.newName}'!`;\n\nreturn [{\n  json: {\n    ...plan,\n    prevInvoiceNo: prev,\n    invoiceNo,\n    duplicateBody: {\n      requests: [{\n        duplicateSheet: {\n          sourceSheetId: plan.sourceSheetId,\n          insertSheetIndex: plan.newIndex,\n          newSheetName: plan.newName,\n        },\n      }],\n    },\n    updateBody: {\n      valueInputOption: 'RAW',\n      data: [\n        { range: tab + plan.invoiceNoCell, values: [[invoiceNo]] },\n        { range: tab + plan.invoiceDateCell, values: [[plan.invoiceDate]] },\n        { range: tab + plan.periodCell, values: [[plan.period]] },\n      ],\n    },\n  },\n}];"
+      },
+      "id": "473c4cae-4127-4c0a-9195-2c7e396e7b47",
+      "name": "Next Invoice No",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $json.spreadsheetId }}:batchUpdate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.duplicateBody) }}",
+        "options": {}
+      },
+      "id": "e4fb0360-af9f-415d-817c-b1babb4d7288",
+      "name": "Duplicate Sheet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1296,
+        -160
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "L0rkqfP0tXLoe6AQ",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Next Invoice No').first().json.spreadsheetId }}/values:batchUpdate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Next Invoice No').first().json.updateBody) }}",
+        "options": {}
+      },
+      "id": "83106cf4-3719-441a-99b1-aa81201ea941",
+      "name": "Update Invoice Cells",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1504,
+        -160
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "L0rkqfP0tXLoe6AQ",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://docs.google.com/spreadsheets/d/{{$('Next Invoice No').first().json.spreadsheetId }}/export?format=pdf&gid={{ $('Duplicate Sheet').first().json.replies[0].duplicateSheet.properties.sheetId }}&range=A1%3AH22&size=statement&portrait=false&scale=4&gridlines=false&printtitle=false&sheetnames=false&pagenum=UNDEFINED&horizontal_alignment=CENTER&vertical_alignment=TOP&top_margin=0.25&bottom_margin=0.25&left_margin=0.25&right_margin=0.25",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "8d28a503-8888-4311-91c7-b2f994a433ee",
+      "name": "Export Sheet as PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1712,
+        -160
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "L0rkqfP0tXLoe6AQ",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $('Next Invoice No').first().json;\nconst item = $input.first();\nitem.binary.data.fileName = `${d.invoiceNo}_${d.newName.replace(/\\s+/g, '_')}.pdf`;\nitem.binary.data.mimeType = 'application/pdf';\nitem.binary.data.fileExtension = 'pdf';\nitem.json = {\n  toEmail: d.toEmail,\n  invoiceNo: d.invoiceNo,\n  newName: d.newName,\n  invoiceDate: d.invoiceDate,\n  period: d.period,\n};\nreturn [item];"
+      },
+      "id": "ad3b066f-2706-4594-b997-d43b50393ad4",
+      "name": "Name PDF",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1936,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.toEmail }}",
+        "subject": "=Invoice {{ $json.invoiceNo }} – {{ $json.newName }}",
+        "message": "=<div style=\"font-family: 'Times New Roman', Times, serif; font-size: 16px; color: #000000;\">\n<p>Dear Bhagya,</p>\n<p>Hope you are doing well.</p>\n<p>Please find attached invoice {{ $json.invoiceNo }} dated {{ $json.invoiceDate }} for the period {{ $json.period }}, along with the GST Non-Enrollment declaration.</p>\n<p>Kindly review the documents and let me know if any further information or clarification is required.</p>\n<p>I look forward to your confirmation.</p>\n<p>Thanks &amp; regards</div>",
+        "options": {
+          "appendAttribution": false,
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              {
+                "property": "data,declaration"
+              }
+            ]
+          }
+        }
+      },
+      "id": "1a06f43d-2980-43c5-b50c-e92747c95906",
+      "name": "Email Invoice",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2800,
+        0
+      ],
+      "webhookId": "9e50d88d-fa0b-4100-8251-93220cdb8735",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "u9avIHKWnBmoEmZ6",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "copy",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.declarationTemplateId }}",
+          "mode": "id"
+        },
+        "name": "=Non-GST Declaration - {{ $('Next Invoice No').first().json.newName }}",
+        "sameFolder": false,
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.declarationFolderId }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1504,
+        128
+      ],
+      "id": "9d90e5b6-fcd4-49ed-8024-616900a0c58e",
+      "name": "Copy Declaration",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "uZg0ZCdume5of5A5",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentURL": "={{ $('Copy Declaration').first().json.id }}",
+        "actionsUi": {
+          "actionFields": [
+            {
+              "action": "replaceAll",
+              "text": "[[DATE]]",
+              "replaceText": "={{ $('Next Invoice No').first().json.invoiceDate }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.googleDocs",
+      "typeVersion": 2,
+      "position": [
+        1712,
+        128
+      ],
+      "id": "2fa42065-12fc-4aa2-a7eb-8e2607c296db",
+      "name": "Fill Date",
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "PZ12D16MYNAueSuN",
+          "name": "Google Docs account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $('Copy Declaration').first().json.id }}",
+          "mode": "id"
+        },
+        "options": {
+          "binaryPropertyName": "declaration",
+          "googleFileConversion": {
+            "conversion": {
+              "docsToFormat": "application/pdf"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1920,
+        128
+      ],
+      "id": "676072bd-1498-4652-b4f0-f2792b5cee62",
+      "name": "Download Declaration PDF",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "uZg0ZCdume5of5A5",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const invoice = $('Name PDF').first();\nconst decl = $('Download Declaration PDF').first();\nconst d = $('Next Invoice No').first().json;\n\nreturn [{\n  json: invoice.json,\n  binary: {\n    data: invoice.binary.data,\n    declaration: {\n      ...decl.binary.declaration,\n      fileName: `Non-GST_Declaration_${d.newName.replace(/\\s+/g, '_')}.pdf`,\n    },\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2560,
+        0
+      ],
+      "id": "f70eb801-50bd-4928-9ec2-ece70b8abf2c",
+      "name": "Combine Attachments"
+    },
+    {
+      "parameters": {
+        "name": "={{ $binary.data.fileName }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.declarationFolderId }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2160,
+        -160
+      ],
+      "id": "6bd0cdc6-b2b7-48f6-8b67-aeb6be995898",
+      "name": "Save Invoice to Drive",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "uZg0ZCdume5of5A5",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2384,
+        0
+      ],
+      "id": "016da5e5-c9d3-49f5-b1dd-fadf9a061c20",
+      "name": "Merge"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every 28th at 9 AM": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Get Sheet List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Sheet List": {
+      "main": [
+        [
+          {
+            "node": "Plan New Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan New Sheet": {
+      "main": [
+        [
+          {
+            "node": "Read Last Invoice No",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Last Invoice No": {
+      "main": [
+        [
+          {
+            "node": "Next Invoice No",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Next Invoice No": {
+      "main": [
+        [
+          {
+            "node": "Duplicate Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Copy Declaration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate Sheet": {
+      "main": [
+        [
+          {
+            "node": "Update Invoice Cells",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Invoice Cells": {
+      "main": [
+        [
+          {
+            "node": "Export Sheet as PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Export Sheet as PDF": {
+      "main": [
+        [
+          {
+            "node": "Name PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Name PDF": {
+      "main": [
+        [
+          {
+            "node": "Save Invoice to Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Copy Declaration": {
+      "main": [
+        [
+          {
+            "node": "Fill Date",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fill Date": {
+      "main": [
+        [
+          {
+            "node": "Download Declaration PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Declaration PDF": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Combine Attachments": {
+      "main": [
+        [
+          {
+            "node": "Email Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Invoice to Drive": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Combine Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "787869c8-3b81-4209-adbf-7f0484209d35",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "af2598b6aeba2f6178abf02b018ea102cb6de9b6a7004a44bb2b6830ef631b8c"
+  },
+  "nodeGroups": [],
+  "id": "WZ5PRzP9wO5ugKpZ",
+  "tags": []
+}

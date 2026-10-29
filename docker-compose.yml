@@ -1,0 +1,43 @@
+# Invoice automation – n8n on your own laptop
+# Start everything with:  docker compose up -d
+name: invoice-automation
+
+x-n8n-env: &n8n-env
+  GENERIC_TIMEZONE: ${TIMEZONE:-Asia/Kolkata}
+  TZ: ${TIMEZONE:-Asia/Kolkata}
+  N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+  N8N_DIAGNOSTICS_ENABLED: "false"
+
+services:
+  # Runs once before n8n starts: imports the workflow + Google credentials.
+  # On later starts it sees it's already done and exits immediately.
+  setup:
+    image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:-latest}
+    entrypoint: ["node", "/setup/setup.js"]
+    environment:
+      <<: *n8n-env
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      FORCE_SETUP: ${FORCE_SETUP:-false}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./setup:/setup:ro
+      - ./workflow:/workflow:ro
+    restart: "no"
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:-latest}
+    container_name: invoice-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"   # keep 5678: the Google OAuth redirect URL depends on it
+    environment: *n8n-env
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+volumes:
+  n8n_data:
+    name: invoice_n8n_data
